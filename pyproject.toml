@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "thesis-breaker"
+version = "0.1.0"
+description = "Zero-API-cost local position postmortem, SOTP/FCFE valuation re-pricing, and thesis-drift discipline officer for US/HK equity investors."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [
+    { name = "SnowyLumiere" }
+]
+keywords = [
+    "investing",
+    "ibkr",
+    "obsidian",
+    "valuation",
+    "sotp",
+    "fcfe",
+    "postmortem",
+    "trading-skill",
+    "caveman",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pyyaml>=6.0",
+]
+yaml = [
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+thesis-breaker = "thesis_breaker.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/SnowyLumiere/thesis-breaker"
+Repository = "https://github.com/SnowyLumiere/thesis-breaker"
+Issues = "https://github.com/SnowyLumiere/thesis-breaker/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

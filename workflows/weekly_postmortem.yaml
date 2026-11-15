@@ -1,0 +1,28 @@
+name: weekly_postmortem
+version: "0.1.0"
+description: Weekly zero-API-cost US/HK portfolio postmortem combining IBKR Flex CSV, Obsidian thesis cards, and Caveman exposure posture.
+cadence: weekly
+inputs:
+  ibkr_csv: examples/ibkr_flex_positions.csv
+  obsidian_vault: examples/obsidian_vault
+  earnings_flash: examples/earnings_q4_flash.md
+steps:
+  - id: parse_positions
+    action: thesis_breaker.parsers.broker_csv.parse_broker_csv
+    description: Parse local IBKR Flex Query or Longbridge CSV into normalized US/HK PositionRecords.
+  - id: load_thesis_cards
+    action: thesis_breaker.parsers.obsidian_thesis.load_thesis_cards
+    description: Load Obsidian YAML+Markdown cards and validate >= 3 falsifiable kill-switches per ticker.
+  - id: extract_earnings
+    action: thesis_breaker.parsers.earnings_extractor.extract_earnings_metrics
+    description: Extract updated core metrics from local earnings flash tables without paid APIs.
+  - id: deterministic_audit
+    action: thesis_breaker.engine.auditor.audit_portfolio
+    description: Verify SHA-256 thesis lock, evaluate kill-switches, re-price SOTP/FCFE & MOS, and detect Thesis Creep.
+  - id: emit_caveman_verdict
+    action: thesis_breaker.formatters.caveman.format_caveman_report
+    description: Output strict 3-line telegraphic verdict and ExposurePosture (human review only; no order execution).
+safety_guardrails:
+  direct_order_execution: false
+  paid_market_data_api: false
+  require_min_kill_switches: 3

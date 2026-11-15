@@ -1,0 +1,14 @@
+name: earnings_flash_audit
+version: "0.1.0"
+description: Rapid (<15 min/week) post-earnings kill-switch extraction and valuation re-pricing workflow.
+cadence: event_driven
+steps:
+  - id: extract_three_numbers
+    command: "python3 -m thesis_breaker extract --earnings <earnings_file> --notes <obsidian_vault> --write"
+    description: Auto-extract only the 3 kill-switch metrics per holding from a local Markdown/CSV earnings dump.
+  - id: run_caveman_audit
+    command: "python3 -m thesis_breaker audit --ibkr <ibkr_csv> --notes <obsidian_vault> --format caveman"
+    description: Print 3-line Caveman verdict exposing breached assumptions, vanished MOS, and self-deception drift.
+safety_guardrails:
+  direct_order_execution: false
+  paid_market_data_api: false
