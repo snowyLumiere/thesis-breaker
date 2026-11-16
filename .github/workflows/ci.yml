@@ -28,7 +28,7 @@ jobs:
       - name: Run unit & end-to-end tests (zero external deps)
         run: python -m unittest discover -s tests -v
 
-      - name: Smoke test installed thesis-breaker CLI
+      - name: Smoke test installed thesis-breaker CLI (zero external deps)
         run: |
           thesis-breaker --version
           thesis-breaker demo
@@ -37,3 +37,20 @@ jobs:
             --notes examples/obsidian_vault \
             --earnings examples/earnings_q4_flash.md \
             --format markdown
+
+      - name: Install optional dependencies (PyYAML & pytest) and test
+        run: |
+          pip install -e ".[dev]"
+          pytest -v
+          thesis-breaker demo
+
+      - name: Build wheel and verify standalone CLI outside repository
+        run: |
+          TMP_OUT=$(mktemp -d)
+          pip wheel . --no-deps -w "$TMP_OUT/dist"
+          pip uninstall -y thesis-breaker
+          pip install "$TMP_OUT"/dist/*.whl
+          mkdir -p "$TMP_OUT/outside/examples"
+          cd "$TMP_OUT/outside"
+          thesis-breaker --version
+          thesis-breaker demo

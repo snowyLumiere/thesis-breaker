@@ -1,7 +1,7 @@
 ---
 symbol: 9988.HK
 name: "Alibaba Group"
-entry_date: 2026-05-18
+entry_date: "2026-05-18"
 entry_price: 102.0
 initial_strategy_type: sotp_rerating
 current_claimed_style: sotp_rerating
@@ -10,29 +10,29 @@ kill_switches:
   - id: KS-1
     name: "阿里云外部收入 YoY"
     metric_key: cloud_rev_yoy_pct
-    operator: >=
+    operator: ">="
     threshold: 4.0
     locked_threshold: 10.0
-    unit: %
+    unit: "%"
     haircut_pct: 15.0
     critical: false
     aliases: ["Cloud YoY"]
   - id: KS-2
     name: "淘天核心 EBITA 利润率"
     metric_key: taotian_ebita_margin_pct
-    operator: >=
+    operator: ">="
     threshold: 42.0
     locked_threshold: 42.0
-    unit: %
+    unit: "%"
     haircut_pct: 10.0
     critical: false
   - id: KS-3
     name: 季度回购年化收益率
     metric_key: buyback_yield_pct
-    operator: >=
+    operator: ">="
     threshold: 5.0
     locked_threshold: 5.0
-    unit: %
+    unit: "%"
     haircut_pct: 8.0
     critical: false
 valuation:

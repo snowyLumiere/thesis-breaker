@@ -26,15 +26,26 @@ from thesis_breaker.parsers.obsidian_thesis import (
 )
 
 
+def _is_valid_examples_dir(path: Path) -> bool:
+    return (
+        path.is_dir()
+        and (path / "ibkr_flex_positions.csv").is_file()
+        and (path / "earnings_q4_flash.md").is_file()
+        and (path / "obsidian_vault").is_dir()
+    )
+
+
 def _resolve_examples_dir() -> Path:
-    """Locate the bundled examples directory from CWD or package source tree."""
-    cwd_examples = Path.cwd() / "examples"
-    if cwd_examples.exists():
-        return cwd_examples
-    pkg_examples = Path(__file__).resolve().parents[2] / "examples"
-    if pkg_examples.exists():
-        return pkg_examples
-    raise FileNotFoundError("Could not locate examples/ directory.")
+    """Locate bundled demo_data or repository examples directory."""
+    candidates = [
+        Path(__file__).resolve().parent / "demo_data",
+        Path(__file__).resolve().parents[2] / "examples",
+        Path.cwd() / "examples",
+    ]
+    for cand in candidates:
+        if _is_valid_examples_dir(cand):
+            return cand
+    raise FileNotFoundError("Could not locate bundled demo_data/ or examples/ directory.")
 
 
 def _render_output(reports: List[PositionAuditReport], fmt: str) -> str:
@@ -218,8 +229,15 @@ def _cmd_init_note(args: argparse.Namespace) -> int:
     )
     if args.output:
         out_path = Path(args.output)
+        force = bool(getattr(args, "force", False))
+        if out_path.exists() and not force:
+            raise FileExistsError(
+                f"Refusing to overwrite existing ThesisCard: {out_path} (pass --force to overwrite)."
+            )
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(template, encoding="utf-8")
+        mode = "w" if force else "x"
+        with out_path.open(mode, encoding="utf-8") as handle:
+            handle.write(template)
         print(f"Created ThesisCard template: {out_path}")
     else:
         print(template)
@@ -277,6 +295,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("--model", choices=["SOTP", "FCFE"], default="SOTP", help="Valuation model.")
     p_init.add_argument("--strategy", default="cyclical_swing", help="Initial strategy type.")
     p_init.add_argument("--output", default=None, help="Output Markdown path (prints to stdout if omitted).")
+    p_init.add_argument("--force", action="store_true", help="Overwrite output file if it already exists.")
     p_init.set_defaults(func=_cmd_init_note)
 
     return parser
@@ -287,7 +306,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+    except (FileNotFoundError, FileExistsError, RuntimeError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
 

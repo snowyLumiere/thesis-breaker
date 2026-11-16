@@ -7,6 +7,7 @@ from pathlib import Path
 
 from thesis_breaker.engine.auditor import audit_portfolio, audit_position
 from thesis_breaker.engine.thesis_lock import compute_thesis_lock_hash, verify_thesis_lock
+from thesis_breaker.formatters.caveman import format_markdown_report
 from thesis_breaker.models import (
     ExposurePosture,
     KillSwitch,
@@ -125,6 +126,23 @@ class TestAuditorAndDrift(unittest.TestCase):
         r3 = KillSwitchResult(ks_crit, actual_value=70.0, breached=True, deviation_pct=-6.67)
         # Critical kill-switch always takes priority
         self.assertEqual(select_worst_breach([r1, r2, r3]).kill_switch.id, "KS-3")
+
+    def test_lock_tampered_operator_blocks_hold_conviction_and_all_passed(self) -> None:
+        card = self.cards["0700.HK"]
+        pos = next(p for p in self.positions if p.symbol == "0700.HK")
+        # Tamper operator from >= to <= while keeping original SHA-256 hash and locked_threshold=8.0
+        card.kill_switches[0].operator = "<="
+        card.latest_actuals["game_rev_yoy_pct"] = 5.0
+
+        rep = audit_position(pos, card)
+        self.assertTrue(rep.drift_result.lock_tampered)
+        self.assertTrue(rep.drift_result.drift_detected)
+        self.assertEqual(rep.posture, ExposurePosture.TRIM_EXPOSURE)
+        self.assertNotEqual(rep.posture, ExposurePosture.HOLD_CONVICTION)
+        self.assertNotIn("全部守住", rep.caveman_lines[0])
+        self.assertIn("校验失败", rep.caveman_lines[0])
+        md = format_markdown_report([rep])
+        self.assertIn("**TAMPERED**", md)
 
 
 if __name__ == "__main__":

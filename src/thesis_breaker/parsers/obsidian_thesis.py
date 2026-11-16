@@ -11,6 +11,7 @@ from thesis_breaker.parsers.broker_csv import normalize_symbol
 from thesis_breaker.parsers.simple_yaml import dump_yaml, parse_yaml
 
 MIN_KILL_SWITCHES = 3
+_VALID_OPERATORS = frozenset({">=", ">", "<=", "<", "=="})
 
 _CORE_THESIS_HEADINGS = ("core thesis", "核心买入逻辑", "买入逻辑", "investment thesis")
 _REVIEW_NOTES_HEADINGS = (
@@ -165,8 +166,23 @@ def parse_thesis_card(md_path: Union[str, Path]) -> Optional[ThesisCard]:
         validation_errors.append(
             f"仅记录了 {len(kill_switches)} 条可证伪死线（强制要求至少 {MIN_KILL_SWITCHES} 条）"
         )
+    for ks in kill_switches:
+        if ks.operator.strip() not in _VALID_OPERATORS:
+            validation_errors.append(f"死线 {ks.id} 运算符无效: {ks.operator!r}")
     if val_cfg is None:
         validation_errors.append("缺少确定性估值模型配置 (valuation: SOTP/FCFE)")
+    elif val_cfg.model_type.strip().upper() == "FCFE":
+        if val_cfg.projection_years < 1:
+            validation_errors.append("FCFE 估值配置无效: projection_years 必须 >= 1")
+        if val_cfg.cost_of_equity_pct <= -100.0:
+            validation_errors.append(
+                f"FCFE 估值配置无效: 股权成本 ({val_cfg.cost_of_equity_pct}%) 必须 > -100%"
+            )
+        if val_cfg.terminal_growth_pct >= val_cfg.cost_of_equity_pct:
+            validation_errors.append(
+                f"FCFE 估值配置无效: 永续增长率 ({val_cfg.terminal_growth_pct}%) "
+                f"不能大于或等于股权成本 ({val_cfg.cost_of_equity_pct}%)"
+            )
 
     raw_actuals = meta.get("latest_actuals") or {}
     latest_actuals: Dict[str, float] = {}

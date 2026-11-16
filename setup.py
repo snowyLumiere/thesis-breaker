@@ -20,6 +20,13 @@ if int(setuptools.__version__.split(".", 1)[0]) < 61:
         python_requires=">=3.9",
         package_dir={"": "src"},
         packages=setuptools.find_packages(where="src"),
+        package_data={
+            "thesis_breaker": [
+                "demo_data/*.csv",
+                "demo_data/*.md",
+                "demo_data/obsidian_vault/*.md",
+            ]
+        },
         entry_points={
             "console_scripts": [
                 "thesis-breaker = thesis_breaker.cli:main",

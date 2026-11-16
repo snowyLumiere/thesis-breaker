@@ -56,6 +56,13 @@ Issues = "https://github.com/SnowyLumiere/thesis-breaker/issues"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+thesis_breaker = [
+    "demo_data/*.csv",
+    "demo_data/*.md",
+    "demo_data/obsidian_vault/*.md",
+]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]

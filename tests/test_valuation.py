@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
+from thesis_breaker.engine.auditor import audit_position
 from thesis_breaker.engine.valuation import compute_fcfe, compute_sotp
 from thesis_breaker.models import (
+    ExposurePosture,
     KillSwitch,
     KillSwitchResult,
+    PositionRecord,
     SOTPSegment,
     ValuationConfig,
 )
+from thesis_breaker.parsers.obsidian_thesis import parse_thesis_card
 
 
 class TestValuationEngine(unittest.TestCase):
@@ -90,6 +96,111 @@ class TestValuationEngine(unittest.TestCase):
         self.assertAlmostEqual(res.initial_intrinsic_value, 399.29, places=1)
         self.assertAlmostEqual(res.repriced_intrinsic_value, 399.29, places=1)
         self.assertFalse(res.mos_vanished)
+
+    def test_fcfe_narrow_terminal_spread_not_clamped(self) -> None:
+        cfg = ValuationConfig(
+            model_type="FCFE",
+            currency="USD",
+            diluted_shares=1.0,
+            net_cash=0.0,
+            required_mos_pct=20.0,
+            base_fcfe_per_share=1.0,
+            growth_rate_pct=0.0,
+            terminal_growth_pct=9.0,
+            cost_of_equity_pct=9.5,
+            projection_years=1,
+        )
+        res = compute_fcfe(
+            config=cfg,
+            kill_switch_results=[],
+            actuals={},
+            entry_price=100.0,
+            current_price=100.0,
+        )
+        # (1.0 + 1.09 / 0.005) / 1.095 = 219.0 / 1.095 = 200.00
+        self.assertEqual(res.initial_intrinsic_value, 200.00)
+        self.assertEqual(res.repriced_intrinsic_value, 200.00)
+
+    def test_fcfe_rejects_gt_gte_ke(self) -> None:
+        for bad_gt in (9.5, 10.0):
+            cfg = ValuationConfig(
+                model_type="FCFE",
+                currency="USD",
+                diluted_shares=1.0,
+                base_fcfe_per_share=1.0,
+                growth_rate_pct=5.0,
+                terminal_growth_pct=bad_gt,
+                cost_of_equity_pct=9.5,
+                projection_years=5,
+            )
+            with self.assertRaises(ValueError):
+                compute_fcfe(
+                    config=cfg,
+                    kill_switch_results=[],
+                    actuals={},
+                    entry_price=50.0,
+                    current_price=50.0,
+                )
+
+        bad_note = """---
+symbol: "BAD"
+name: "Bad FCFE"
+entry_date: "2026-01-01"
+entry_price: 50.0
+initial_strategy_type: "compounder_fcfe"
+kill_switches:
+  - id: KS-1
+    name: "K1"
+    metric_key: k1
+    operator: ">="
+    threshold: 10.0
+    unit: "%"
+  - id: KS-2
+    name: "K2"
+    metric_key: k2
+    operator: ">="
+    threshold: 10.0
+    unit: "%"
+  - id: KS-3
+    name: "K3"
+    metric_key: k3
+    operator: ">="
+    threshold: 10.0
+    unit: "%"
+valuation:
+  model_type: "FCFE"
+  currency: "USD"
+  diluted_shares: 1.0
+  base_fcfe_per_share: 1.0
+  growth_rate_pct: 5.0
+  terminal_growth_pct: 10.0
+  cost_of_equity_pct: 9.5
+  projection_years: 5
+latest_actuals:
+  k1: 12.0
+  k2: 12.0
+  k3: 12.0
+---
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "BAD.md"
+            p.write_text(bad_note, encoding="utf-8")
+            card = parse_thesis_card(p)
+            self.assertIsNotNone(card)
+            self.assertTrue(card.validation_errors)
+            pos = PositionRecord(
+                symbol="BAD",
+                name="Bad FCFE",
+                currency="USD",
+                quantity=10,
+                avg_cost=50.0,
+                current_price=50.0,
+                market_value=500.0,
+                unrealized_pnl=0.0,
+                unrealized_pnl_pct=0.0,
+            )
+            rep = audit_position(pos, card)
+            self.assertEqual(rep.posture, ExposurePosture.UNTRACKED_NAKED_POSITION)
 
 
 if __name__ == "__main__":

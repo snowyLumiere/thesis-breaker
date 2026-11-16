@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import re
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -71,7 +72,7 @@ def _check_operator(actual: float, operator: str, threshold: float) -> bool:
         return actual < threshold
     if op == "==":
         return abs(actual - threshold) < 1e-9
-    return actual >= threshold
+    raise ValueError(f"Unsupported kill-switch operator: {operator!r}")
 
 
 def evaluate_kill_switch(
@@ -201,6 +202,8 @@ def detect_thesis_drift(
         excuse_summary = f"将「{style_drift}」当作继续持仓理由"
     elif tolerance_creep_details:
         excuse_summary = tolerance_creep_details[0]
+    elif not lock_valid:
+        excuse_summary = "事后篡改已锁定的死线条件或估值基准"
 
     failed_assumption_summary: Optional[str] = None
     if breached_results:
@@ -208,6 +211,8 @@ def detect_thesis_drift(
         failed_assumption_summary = _format_failed_assumption(worst)
     elif creep_results:
         failed_assumption_summary = _format_failed_assumption(creep_results[0])
+    elif not lock_valid:
+        failed_assumption_summary = "SHA-256 锁定的初始死线契约"
 
     return DriftAuditResult(
         drift_detected=drift_detected,
@@ -241,9 +246,18 @@ def _determine_posture_and_action(
 
     breached = [r for r in ks_results if r.breached]
     critical_breach = any(r.kill_switch.critical for r in breached)
-    mos_negative = val_result is not None and val_result.current_mos_pct <= 0.0
+    mos_negative = (
+        val_result is not None
+        and val_result.current_mos_pct is not None
+        and val_result.current_mos_pct <= 0.0
+    )
     mos_below_floor = (
-        val_result is not None and val_result.current_mos_pct < val_result.required_mos_pct
+        val_result is not None
+        and val_result.current_mos_pct is not None
+        and val_result.current_mos_pct < val_result.required_mos_pct
+    )
+    price_missing = position.current_price <= 0.0 or (
+        val_result is not None and val_result.current_mos_pct is None
     )
 
     if critical_breach or len(breached) >= 2 or (
@@ -254,14 +268,25 @@ def _determine_posture_and_action(
             "无条件执行死线砍仓/清仓（至少立即削减 50%-100% 敞口），禁止摊平",
         )
 
-    if len(breached) == 1 or drift.tolerance_creep_details or drift.style_drift or mos_below_floor:
+    if (
+        len(breached) == 1
+        or drift.lock_tampered
+        or drift.tolerance_creep_details
+        or drift.style_drift
+        or mos_below_floor
+    ):
         return (
             ExposurePosture.TRIM_EXPOSURE,
             "执行纪律裁剪（削减 30%-50% 风险敞口），恢复锁定的原始死线",
         )
 
     missing_any = any(r.missing_data for r in ks_results)
-    if position.unrealized_pnl_pct <= -10.0 or missing_any or drift.rationalization_phrases:
+    if (
+        position.unrealized_pnl_pct <= -10.0
+        or missing_any
+        or price_missing
+        or drift.rationalization_phrases
+    ):
         return (
             ExposurePosture.WATCH_WARNING,
             "暂停加仓并补全最新指标核对，紧盯剩余死线边界",
@@ -308,34 +333,50 @@ def audit_position(
         return preliminary
 
     actuals = _merge_actuals(card, external_actuals)
-    ks_results = [evaluate_kill_switch(ks, actuals) for ks in card.kill_switches]
+    runtime_errors: List[str] = []
+    ks_results: List[KillSwitchResult] = []
+    for ks in card.kill_switches:
+        try:
+            ks_results.append(evaluate_kill_switch(ks, actuals))
+        except ValueError as exc:
+            runtime_errors.append(str(exc))
 
     lock_valid, lock_reason = verify_thesis_lock(card)
     val_result: Optional[ValuationResult] = None
-    if card.valuation is not None:
-        val_result = reprice_valuation(
-            config=card.valuation,
-            kill_switch_results=ks_results,
-            actuals=actuals,
-            entry_price=card.entry_price,
-            current_price=position.current_price,
-        )
+    if card.valuation is not None and not card.validation_errors and not runtime_errors:
+        try:
+            val_result = reprice_valuation(
+                config=card.valuation,
+                kill_switch_results=ks_results,
+                actuals=actuals,
+                entry_price=card.entry_price,
+                current_price=position.current_price,
+            )
+        except ValueError as exc:
+            runtime_errors.append(str(exc))
 
-    drift = detect_thesis_drift(card, position, ks_results, lock_valid=lock_valid)
+    effective_card = (
+        replace(card, validation_errors=[*card.validation_errors, *runtime_errors])
+        if runtime_errors
+        else card
+    )
+    drift = detect_thesis_drift(effective_card, position, ks_results, lock_valid=lock_valid)
     posture, action = _determine_posture_and_action(
-        position, card, ks_results, val_result, drift
+        position, effective_card, ks_results, val_result, drift
     )
 
-    warnings: List[str] = list(card.validation_errors)
+    warnings: List[str] = list(effective_card.validation_errors)
     if not lock_valid:
         warnings.append(lock_reason)
+    if position.current_price <= 0.0:
+        warnings.append("券商 CSV 缺少有效现价（MarkPrice / PositionValue），无法校验当前安全边际")
     missing_keys = [r.kill_switch.metric_key for r in ks_results if r.missing_data]
     if missing_keys:
         warnings.append(f"缺少最新实际数据指标: {', '.join(missing_keys)}")
 
     report = PositionAuditReport(
         position=position,
-        thesis_card=card,
+        thesis_card=effective_card,
         kill_switch_results=ks_results,
         valuation_result=val_result,
         drift_result=drift,

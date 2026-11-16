@@ -1,7 +1,7 @@
 ---
 symbol: 0700.HK
 name: "Tencent Holdings"
-entry_date: 2025-11-04
+entry_date: "2025-11-04"
 entry_price: 345.0
 initial_strategy_type: compounder_fcfe
 current_claimed_style: compounder_fcfe
@@ -10,28 +10,28 @@ kill_switches:
   - id: KS-1
     name: "本土及海外游戏收入 YoY"
     metric_key: game_rev_yoy_pct
-    operator: >=
+    operator: ">="
     threshold: 8.0
     locked_threshold: 8.0
-    unit: %
+    unit: "%"
     haircut_pct: 15.0
     critical: false
   - id: KS-2
     name: 综合毛利率
     metric_key: gross_margin_pct
-    operator: >=
+    operator: ">="
     threshold: 50.0
     locked_threshold: 50.0
-    unit: %
+    unit: "%"
     haircut_pct: 12.0
     critical: false
   - id: KS-3
     name: 稀释总股本同比变动（持续净注销）
     metric_key: share_count_change_pct
-    operator: <=
+    operator: "<="
     threshold: -1.0
     locked_threshold: -1.0
-    unit: %
+    unit: "%"
     haircut_pct: 10.0
     critical: false
 valuation:

@@ -1,0 +1,5 @@
+Symbol,Description,AssetClass,CurrencyPrimary,ListingExchange,Quantity,CostBasisPrice,MarkPrice,PositionValue,FifoPnlUnrealized,OpenDateTime
+MU,Micron Technology Inc,STK,USD,NASDAQ,300,118.00,98.60,29580.00,-5820.00,2026-06-12
+9988,Alibaba Group Holding Ltd,STK,HKD,SEHK,1500,102.00,87.50,131250.00,-21750.00,2026-05-18
+700,Tencent Holdings Ltd,STK,HKD,SEHK,600,345.00,408.80,245280.00,38280.00,2025-11-04
+SMCI,Super Micro Computer Inc,STK,USD,NASDAQ,200,48.00,32.40,6480.00,-3120.00,2026-09-22

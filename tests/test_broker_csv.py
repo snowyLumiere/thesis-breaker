@@ -6,7 +6,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from thesis_breaker.engine.auditor import audit_position
+from thesis_breaker.models import ExposurePosture
 from thesis_breaker.parsers.broker_csv import normalize_symbol, parse_broker_csv
+from thesis_breaker.parsers.obsidian_thesis import load_thesis_cards
 
 
 class TestBrokerCsvParser(unittest.TestCase):
@@ -76,6 +79,48 @@ class TestBrokerCsvParser(unittest.TestCase):
             self.assertAlmostEqual(positions[0].avg_cost, 118.0, places=2)
             self.assertAlmostEqual(positions[0].unrealized_pnl, -8400.0, places=2)
             self.assertEqual(positions[0].first_buy_date, "2026-06-01")
+
+    def test_missing_mark_price_derives_from_market_value_and_triggers_trim(self) -> None:
+        vault = Path(__file__).resolve().parents[1] / "examples" / "obsidian_vault"
+        cards = load_thesis_cards(vault)
+        tencent_card = cards["0700.HK"]
+        # Tencent repriced FCFE IV is ~548.43 HKD with required MOS 20% (floor price ~438.74).
+        # At true implied price 480.0 (PositionValue 288000 / Quantity 600), MOS is ~12.5% < 20% -> TRIM_EXPOSURE.
+        csv_no_mark = (
+            "Symbol,CurrencyPrimary,ListingExchange,Quantity,CostBasisPrice,PositionValue\n"
+            "700,HKD,SEHK,600,345.00,288000.00\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "no_mark.csv"
+            p.write_text(csv_no_mark, encoding="utf-8")
+            positions = parse_broker_csv(p)
+            self.assertEqual(len(positions), 1)
+            self.assertAlmostEqual(positions[0].current_price, 480.0, places=2)
+            rep = audit_position(positions[0], tencent_card)
+            self.assertEqual(rep.posture, ExposurePosture.TRIM_EXPOSURE)
+            self.assertIsNotNone(rep.valuation_result.current_mos_pct)
+            self.assertLess(rep.valuation_result.current_mos_pct, 20.0)
+
+    def test_missing_both_price_and_market_value_warns_and_never_reports_100_mos(self) -> None:
+        vault = Path(__file__).resolve().parents[1] / "examples" / "obsidian_vault"
+        cards = load_thesis_cards(vault)
+        tencent_card = cards["0700.HK"]
+        csv_no_price_or_mv = (
+            "Symbol,CurrencyPrimary,ListingExchange,Quantity,CostBasisPrice\n"
+            "700,HKD,SEHK,600,345.00\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "no_price_no_mv.csv"
+            p.write_text(csv_no_price_or_mv, encoding="utf-8")
+            positions = parse_broker_csv(p)
+            self.assertEqual(len(positions), 1)
+            self.assertEqual(positions[0].current_price, 0.0)
+            rep = audit_position(positions[0], tencent_card)
+            self.assertIsNone(rep.valuation_result.current_mos_pct)
+            self.assertEqual(rep.posture, ExposurePosture.WATCH_WARNING)
+            self.assertTrue(any("缺少有效现价" in w for w in rep.warnings))
+            self.assertNotIn("100.0%", rep.caveman_lines[0])
+            self.assertIn("无法计算", rep.caveman_lines[0])
 
 
 if __name__ == "__main__":

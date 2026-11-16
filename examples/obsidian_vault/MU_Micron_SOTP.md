@@ -1,7 +1,7 @@
 ---
 symbol: MU
 name: "Micron Technology"
-entry_date: 2026-06-12
+entry_date: "2026-06-12"
 entry_price: 118.0
 initial_strategy_type: cyclical_swing
 current_claimed_style: long_term_value
@@ -10,30 +10,30 @@ kill_switches:
   - id: KS-1
     name: "Q4 HBM3E 良率"
     metric_key: hbm_yield_pct
-    operator: >=
+    operator: ">="
     threshold: 75.0
     locked_threshold: 75.0
-    unit: %
+    unit: "%"
     haircut_pct: 20.0
     critical: true
     aliases: ["HBM yield", "HBM3E yield"]
   - id: KS-2
     name: "DRAM 合约价环比增速"
     metric_key: dram_contract_qoq_pct
-    operator: >=
+    operator: ">="
     threshold: 0.0
     locked_threshold: 0.0
-    unit: %
+    unit: "%"
     haircut_pct: 15.0
     critical: false
     aliases: ["DRAM contract QoQ"]
   - id: KS-3
     name: 综合毛利率底线
     metric_key: gross_margin_pct
-    operator: >=
+    operator: ">="
     threshold: 38.0
     locked_threshold: 38.0
-    unit: %
+    unit: "%"
     haircut_pct: 10.0
     critical: false
 valuation:

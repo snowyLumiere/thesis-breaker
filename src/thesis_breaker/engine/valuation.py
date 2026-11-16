@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 from thesis_breaker.models import KillSwitchResult, ValuationConfig, ValuationResult
 
@@ -12,6 +12,31 @@ def _safe_mos(intrinsic_value: float, price: float) -> float:
     if intrinsic_value <= 0:
         return -100.0
     return ((intrinsic_value - price) / intrinsic_value) * 100.0
+
+
+def _finalize_mos(
+    initial_iv: float,
+    repriced_iv: float,
+    entry_price: float,
+    current_price: float,
+    required_mos_pct: float,
+    notes: List[str],
+) -> Tuple[Optional[float], Optional[float], bool]:
+    """Compute entry/current Margin of Safety; return None instead of 100% when price is missing."""
+    ref_entry = entry_price if entry_price > 0 else current_price
+    initial_mos = (
+        round(_safe_mos(initial_iv, ref_entry), 2) if ref_entry > 0 else None
+    )
+    if current_price > 0:
+        raw_current_mos = _safe_mos(repriced_iv, current_price)
+        return (
+            initial_mos,
+            round(raw_current_mos, 2),
+            raw_current_mos <= 0.0 or raw_current_mos < required_mos_pct,
+        )
+
+    notes.append("缺少有效现价（current_price <= 0），无法计算当前安全边际")
+    return initial_mos, None, False
 
 
 def _sum_breached_haircuts(kill_switch_results: List[KillSwitchResult]) -> float:
@@ -70,8 +95,14 @@ def compute_sotp(
     val_change_pct = (
         ((repriced_iv - initial_iv) / initial_iv) * 100.0 if initial_iv > 0 else 0.0
     )
-    initial_mos = _safe_mos(initial_iv, entry_price if entry_price > 0 else current_price)
-    current_mos = _safe_mos(repriced_iv, current_price)
+    initial_mos, current_mos, mos_vanished = _finalize_mos(
+        initial_iv=initial_iv,
+        repriced_iv=repriced_iv,
+        entry_price=entry_price,
+        current_price=current_price,
+        required_mos_pct=config.required_mos_pct,
+        notes=notes,
+    )
 
     return ValuationResult(
         model_type="SOTP",
@@ -80,10 +111,10 @@ def compute_sotp(
         repriced_intrinsic_value=round(repriced_iv, 2),
         valuation_change_pct=round(val_change_pct, 2),
         current_price=round(current_price, 2),
-        initial_mos_pct=round(initial_mos, 2),
-        current_mos_pct=round(current_mos, 2),
+        initial_mos_pct=initial_mos,
+        current_mos_pct=current_mos,
         required_mos_pct=round(config.required_mos_pct, 2),
-        mos_vanished=current_mos <= 0.0 or current_mos < config.required_mos_pct,
+        mos_vanished=mos_vanished,
         total_haircut_applied_pct=round(total_haircut, 2),
         notes=notes,
     )
@@ -98,22 +129,33 @@ def _fcfe_dcf_per_share(
     net_cash_per_share: float,
 ) -> float:
     """Two-stage Free Cash Flow to Equity (FCFE) Gordon Growth model per share."""
+    if projection_years < 1:
+        raise ValueError(
+            f"Invalid FCFE projection_years ({projection_years}): must be >= 1."
+        )
+    if cost_of_equity_pct <= -100.0:
+        raise ValueError(
+            f"Invalid FCFE cost_of_equity_pct ({cost_of_equity_pct}%): must be > -100%."
+        )
+    if terminal_growth_pct >= cost_of_equity_pct:
+        raise ValueError(
+            f"Invalid FCFE parameters: cost_of_equity_pct ({cost_of_equity_pct}%) "
+            f"must be strictly greater than terminal_growth_pct ({terminal_growth_pct}%)."
+        )
+
     g = growth_rate_pct / 100.0
     gt = terminal_growth_pct / 100.0
     ke = cost_of_equity_pct / 100.0
-
-    # Ensure terminal spread ke - gt stays strictly positive for numerical stability
-    spread = max(0.01, ke - gt)
+    spread = ke - gt
 
     pv_explicit = 0.0
     projected_fcfe = base_fcfe
-    years = max(1, projection_years)
-    for yr in range(1, years + 1):
+    for yr in range(1, projection_years + 1):
         projected_fcfe = projected_fcfe * (1.0 + g)
         pv_explicit += projected_fcfe / ((1.0 + ke) ** yr)
 
     terminal_value = (projected_fcfe * (1.0 + gt)) / spread
-    pv_terminal = terminal_value / ((1.0 + ke) ** years)
+    pv_terminal = terminal_value / ((1.0 + ke) ** projection_years)
     return max(0.0, pv_explicit + pv_terminal + net_cash_per_share)
 
 
@@ -166,8 +208,14 @@ def compute_fcfe(
     val_change_pct = (
         ((repriced_iv - initial_iv) / initial_iv) * 100.0 if initial_iv > 0 else 0.0
     )
-    initial_mos = _safe_mos(initial_iv, entry_price if entry_price > 0 else current_price)
-    current_mos = _safe_mos(repriced_iv, current_price)
+    initial_mos, current_mos, mos_vanished = _finalize_mos(
+        initial_iv=initial_iv,
+        repriced_iv=repriced_iv,
+        entry_price=entry_price,
+        current_price=current_price,
+        required_mos_pct=config.required_mos_pct,
+        notes=notes,
+    )
 
     return ValuationResult(
         model_type="FCFE",
@@ -176,10 +224,10 @@ def compute_fcfe(
         repriced_intrinsic_value=round(repriced_iv, 2),
         valuation_change_pct=round(val_change_pct, 2),
         current_price=round(current_price, 2),
-        initial_mos_pct=round(initial_mos, 2),
-        current_mos_pct=round(current_mos, 2),
+        initial_mos_pct=initial_mos,
+        current_mos_pct=current_mos,
         required_mos_pct=round(config.required_mos_pct, 2),
-        mos_vanished=current_mos <= 0.0 or current_mos < config.required_mos_pct,
+        mos_vanished=mos_vanished,
         total_haircut_applied_pct=round(total_haircut, 2),
         notes=notes,
     )

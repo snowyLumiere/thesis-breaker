@@ -124,8 +124,8 @@ class ValuationResult:
     repriced_intrinsic_value: float
     valuation_change_pct: float
     current_price: float
-    initial_mos_pct: float
-    current_mos_pct: float
+    initial_mos_pct: Optional[float]
+    current_mos_pct: Optional[float]
     required_mos_pct: float
     mos_vanished: bool
     total_haircut_applied_pct: float

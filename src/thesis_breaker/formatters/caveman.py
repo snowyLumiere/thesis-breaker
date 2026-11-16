@@ -45,6 +45,9 @@ def _format_breach_detail(report: PositionAuditReport) -> str:
             f"-> {ks.threshold:g}{ks.unit}）"
         )
 
+    if report.drift_result.lock_tampered:
+        return "死线锁 SHA-256 校验失败（死线条件或锁基准被篡改，拒绝认定达标）"
+
     missing = [r for r in report.kill_switch_results if r.missing_data]
     if missing:
         return f"{total - len(missing)}/{total} 条死线达标，{len(missing)} 条缺少最新数据"
@@ -56,6 +59,12 @@ def _format_valuation_snippet(report: PositionAuditReport) -> str:
     val = report.valuation_result
     if val is None:
         return "无确定性估值底稿"
+    if val.current_mos_pct is None:
+        return (
+            f"重算 {val.model_type} 内在价值 {val.currency} {val.repriced_intrinsic_value:.2f}"
+            f"（初值 {val.initial_intrinsic_value:.2f}），"
+            f"缺少有效现价导致当前安全边际无法计算（死线要求 >={val.required_mos_pct:.1f}%）"
+        )
     if val.current_mos_pct <= 0.0:
         mos_status = "安全边际已彻底消失/高估"
     elif val.current_mos_pct < val.required_mos_pct:
@@ -148,7 +157,11 @@ def format_markdown_report(reports: List[PositionAuditReport]) -> str:
         val = r.valuation_result
         if val:
             iv_str = f"{val.currency} {val.initial_intrinsic_value:.2f} -> {val.repriced_intrinsic_value:.2f}"
-            mos_str = f"{val.current_mos_pct:+.1f}% (底线 {val.required_mos_pct:.0f}%)"
+            mos_str = (
+                f"{val.current_mos_pct:+.1f}% (底线 {val.required_mos_pct:.0f}%)"
+                if val.current_mos_pct is not None
+                else f"MISSING (底线 {val.required_mos_pct:.0f}%)"
+            )
             model_str = val.model_type
         else:
             iv_str = "N/A"
@@ -181,6 +194,8 @@ def format_markdown_report(reports: List[PositionAuditReport]) -> str:
                     status = "CREEP"
                 elif ksr.missing_data:
                     status = "MISSING"
+                elif r.drift_result.lock_tampered:
+                    status = "TAMPERED"
                 else:
                     status = "PASS"
                 lines.append(

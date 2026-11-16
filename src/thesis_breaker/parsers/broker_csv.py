@@ -207,13 +207,31 @@ def _row_to_position(fields: Dict[str, str], broker_source: str) -> Optional[Pos
     avg_cost = _parse_float(fields.get("avg_cost"))
     current_price = _parse_float(fields.get("current_price"))
     market_value = _parse_float(fields.get("market_value"))
-    if market_value == 0.0 and current_price > 0:
+    raw_pnl = fields.get("unrealized_pnl")
+    has_explicit_pnl = raw_pnl is not None and raw_pnl.strip() not in (
+        "",
+        "-",
+        "--",
+        "N/A",
+        "null",
+    )
+    explicit_pnl = _parse_float(raw_pnl) if has_explicit_pnl else 0.0
+
+    if current_price <= 0.0:
+        if market_value != 0.0 and abs(qty) > 1e-9:
+            current_price = abs(market_value) / abs(qty)
+        elif avg_cost > 0.0 and has_explicit_pnl and abs(qty) > 1e-9:
+            implied_mv = qty * avg_cost + explicit_pnl
+            if implied_mv / qty > 0.0:
+                current_price = implied_mv / qty
+                market_value = implied_mv
+
+    if market_value == 0.0 and current_price > 0.0:
         market_value = qty * current_price
 
     cost_basis_total = qty * avg_cost
-    raw_pnl = fields.get("unrealized_pnl")
-    if raw_pnl is not None and raw_pnl.strip() not in ("", "-", "--"):
-        unrealized_pnl = _parse_float(raw_pnl)
+    if has_explicit_pnl:
+        unrealized_pnl = explicit_pnl
     elif avg_cost > 0 and current_price > 0:
         unrealized_pnl = (current_price - avg_cost) * qty
     else:

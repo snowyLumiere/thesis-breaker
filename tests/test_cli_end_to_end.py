@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 from thesis_breaker.cli import main
@@ -119,6 +120,110 @@ class TestCliEndToEnd(unittest.TestCase):
         )
         self.assertIn("死线锁哈希不匹配", proc.stdout)
         self.assertIn("[HOLD_CONVICTION]", proc.stdout)
+
+    def test_init_note_refuses_overwrite_without_force(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            note_path = Path(tmp) / "NVDA.md"
+            self._run_cli(
+                [
+                    "init-note",
+                    "--symbol",
+                    "NVDA",
+                    "--name",
+                    "NVIDIA",
+                    "--output",
+                    str(note_path),
+                ]
+            )
+            custom_marker = "CUSTOM_REVIEW_DO_NOT_DELETE"
+            note_path.write_text(
+                note_path.read_text(encoding="utf-8") + f"\n{custom_marker}\n",
+                encoding="utf-8",
+            )
+            err_buf = io.StringIO()
+            with contextlib.redirect_stderr(err_buf):
+                code = main(
+                    [
+                        "init-note",
+                        "--symbol",
+                        "NVDA",
+                        "--output",
+                        str(note_path),
+                    ]
+                )
+            self.assertEqual(code, 2)
+            self.assertIn("Refusing to overwrite", err_buf.getvalue())
+            self.assertIn(custom_marker, note_path.read_text(encoding="utf-8"))
+
+            self._run_cli(
+                [
+                    "init-note",
+                    "--symbol",
+                    "NVDA",
+                    "--output",
+                    str(note_path),
+                    "--force",
+                ]
+            )
+            self.assertNotIn(custom_marker, note_path.read_text(encoding="utf-8"))
+
+    def test_bundled_demo_data_matches_examples_and_wheel_demo_runs_outside_repo(self) -> None:
+        examples_dir = self.root / "examples"
+        demo_data_dir = self.root / "src" / "thesis_breaker" / "demo_data"
+        example_files = sorted(
+            p.relative_to(examples_dir) for p in examples_dir.rglob("*") if p.is_file()
+        )
+        demo_files = sorted(
+            p.relative_to(demo_data_dir) for p in demo_data_dir.rglob("*") if p.is_file()
+        )
+        self.assertEqual(example_files, demo_files)
+        for rel in example_files:
+            self.assertEqual(
+                (examples_dir / rel).read_bytes(),
+                (demo_data_dir / rel).read_bytes(),
+                f"Mismatch between examples/{rel} and demo_data/{rel}",
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            dist_dir = tmp_path / "dist"
+            site_dir = tmp_path / "site"
+            outside_dir = tmp_path / "outside"
+            (outside_dir / "examples").mkdir(parents=True, exist_ok=True)
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "wheel",
+                    str(self.root),
+                    "--no-build-isolation",
+                    "--no-deps",
+                    "-w",
+                    str(dist_dir),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            wheels = list(dist_dir.glob("*.whl"))
+            self.assertEqual(len(wheels), 1)
+            with zipfile.ZipFile(wheels[0], "r") as zf:
+                zf.extractall(site_dir)
+
+            env = dict(os.environ)
+            env["PYTHONPATH"] = str(site_dir)
+            proc = subprocess.run(
+                [sys.executable, "-m", "thesis_breaker", "demo"],
+                cwd=str(outside_dir),
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertIn("[持仓：MU", proc.stdout)
+            self.assertIn("[HOLD_CONVICTION]", proc.stdout)
 
 
 if __name__ == "__main__":

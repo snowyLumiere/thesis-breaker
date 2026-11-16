@@ -121,7 +121,24 @@ thesis-breaker/
 
 ## 挂载为 AI Skill（Claude Code / Antigravity / OpenClaw）
 
-将 `skills/thesis-breaker/` 目录复制到你的 Agent Skills 目录，并在对话中调用：
+跨目录在任意投研仓库或 Obsidian 库中调用时，请先安装本地 `thesis-breaker` Python 引擎，再挂载 Skill 目录：
+
+1. **安装本地引擎**（在当前 Python 环境中确保任何目录都能执行 `python3 -m thesis_breaker` 与 `thesis-breaker`）：
+
+```bash
+git clone https://github.com/SnowyLumiere/thesis-breaker.git
+cd thesis-breaker
+python3 -m pip install .   # 本地开发调试可用 python3 -m pip install -e .
+thesis-breaker --version
+```
+
+2. **复制 Skill 目录**到你的 Agent Skills 目录（例如 `~/.claude/skills/thesis-breaker`、`~/.gemini/antigravity/skills/thesis-breaker` 或目标项目的 `.agents/skills/thesis-breaker`）：
+
+```bash
+cp -R skills/thesis-breaker ~/.claude/skills/thesis-breaker
+```
+
+3. 在对话中调用：
 
 > "用 `thesis-breaker` 复盘我的 IBKR CSV 与 Obsidian 持仓笔记，开 Caveman 冷酷模式，不许说安慰话。"
 

@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
 
+from thesis_breaker import cli
 from thesis_breaker.parsers.earnings_extractor import (
     extract_earnings_metrics,
     parse_metric_number,
 )
-from thesis_breaker.parsers.obsidian_thesis import load_thesis_cards
+from thesis_breaker.parsers.obsidian_thesis import load_thesis_cards, parse_thesis_card
 
 
 class TestEarningsExtractor(unittest.TestCase):
@@ -76,6 +79,105 @@ class TestEarningsExtractor(unittest.TestCase):
             extracted = extract_earnings_metrics(p, cards.values())
             self.assertEqual(extracted["MU"]["hbm_yield_pct"], 64.5)
             self.assertNotIn("dram_contract_qoq_pct", extracted["MU"])
+
+    def test_parse_metric_number_cross_magnitude_units(self) -> None:
+        self.assertEqual(parse_metric_number("$500M", expected_unit="B"), 0.5)
+        self.assertEqual(parse_metric_number("$1.2T", expected_unit="B"), 1200.0)
+        self.assertEqual(parse_metric_number("$2.5B", expected_unit="M"), 2500.0)
+        self.assertEqual(parse_metric_number("5000万", expected_unit="亿"), 0.5)
+        self.assertIsNone(parse_metric_number("62%", expected_unit="B"))
+        self.assertIsNone(parse_metric_number("$500M", expected_unit="%"))
+
+        base = Path(__file__).resolve().parents[1] / "examples"
+        cards = load_thesis_cards(base / "obsidian_vault")
+        # Also test extract --write on a card with unit "B" kill-switch + SOTP hbm_rev_b
+        note_text = """---
+symbol: "MU"
+name: "Micron"
+entry_date: "2026-06-12"
+entry_price: 118.0
+initial_strategy_type: "cyclical_swing"
+kill_switches:
+  - id: KS-1
+    name: "HBM Revenue"
+    metric_key: hbm_rev_b
+    operator: ">="
+    threshold: 1.0
+    unit: "B"
+    haircut_pct: 20.0
+    critical: true
+  - id: KS-2
+    name: "Yield"
+    metric_key: hbm_yield_pct
+    operator: ">="
+    threshold: 75.0
+    unit: "%"
+    haircut_pct: 15.0
+  - id: KS-3
+    name: "Gross Margin"
+    metric_key: gross_margin_pct
+    operator: ">="
+    threshold: 38.0
+    unit: "%"
+    haircut_pct: 10.0
+valuation:
+  model_type: "SOTP"
+  currency: "USD"
+  diluted_shares: 1.12
+  segments:
+    - name: "HBM"
+      metric_value: 14.0
+      multiple: 7.5
+      metric_key: hbm_rev_b
+latest_actuals: {}
+---
+"""
+        flash = "## MU\n- hbm_rev_b: $500M\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            note_path = tmp_path / "MU.md"
+            flash_path = tmp_path / "flash.md"
+            note_path.write_text(note_text, encoding="utf-8")
+            flash_path.write_text(flash, encoding="utf-8")
+            extracted = extract_earnings_metrics(flash_path, cards.values())
+            # MU card in examples has SOTP segment metric_key hbm_rev_b -> infers unit "B"
+            extracted_custom = extract_earnings_metrics(flash_path, [parse_thesis_card(note_path)])
+            self.assertEqual(extracted_custom["MU"]["hbm_rev_b"], 0.5)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "extract",
+                            "--earnings",
+                            str(flash_path),
+                            "--notes",
+                            str(note_path),
+                            "--write",
+                        ]
+                    ),
+                    0,
+                )
+            reloaded = parse_thesis_card(note_path)
+            self.assertEqual(reloaded.latest_actuals["hbm_rev_b"], 0.5)
+            self.assertIsNotNone(extracted)
+
+    def test_explicit_symbol_table_not_overwritten_by_prose(self) -> None:
+        base = Path(__file__).resolve().parents[1] / "examples"
+        cards = load_thesis_cards(base / "obsidian_vault")
+        mixed_report = (
+            "## Summary\n"
+            "| Symbol | Metric Key | Actual |\n"
+            "| --- | --- | ---: |\n"
+            "| MU | hbm_yield_pct | 62% |\n\n"
+            "## MU\n"
+            "- hbm_yield_pct: 78%\n"
+            "- Q4 HBM3E 良率: 78%\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "mixed.md"
+            p.write_text(mixed_report, encoding="utf-8")
+            extracted = extract_earnings_metrics(p, cards.values())
+            self.assertEqual(extracted["MU"]["hbm_yield_pct"], 62.0)
 
 
 if __name__ == "__main__":

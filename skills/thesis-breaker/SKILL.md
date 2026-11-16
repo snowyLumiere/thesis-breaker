@@ -32,6 +32,16 @@ See `references/caveman_rules.md`. For every position audited, emit **only 3 lin
 - Do NOT write "既有上涨空间也需注意宏观风险", "投资有风险", "仅供参考", or comforting filler.
 - Do NOT repeat CSV rows or speculate on macro narratives not present in local files.
 
+## Prerequisites
+
+Before running any audit outside the `thesis-breaker` source repository, verify the local engine package is installed in the active Python environment:
+
+```bash
+python3 -m thesis_breaker --version
+```
+
+If `No module named thesis_breaker` occurs, install it from the `thesis-breaker` repository first (`python3 -m pip install /path/to/thesis-breaker`) rather than guessing valuations in prose.
+
 ## Execution Workflow
 
 1. Run `python3 -m thesis_breaker audit --ibkr <csv> --notes <obsidian_dir> [--earnings <flash_md>] --format json`
