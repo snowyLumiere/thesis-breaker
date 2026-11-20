@@ -21,6 +21,35 @@ _DEFAULT_FX_TO_USD: Dict[str, float] = {
     "SGD": 1.0 / 1.34,
 }
 
+_CURRENCY_ALIASES: Dict[str, str] = {
+    "美元": "USD",
+    "美金": "USD",
+    "港币": "HKD",
+    "港元": "HKD",
+    "人民币": "CNY",
+    "离岸人民币": "CNH",
+}
+
+_HK_EXCHANGE_PREFIXES = frozenset({"SEHK", "HKEX", "HK", "HKG"})
+_US_EXCHANGE_PREFIXES = frozenset({"US", "USA", "NASDAQ", "NYSE", "AMEX", "ARCA", "BATS"})
+
+_SUMMARY_ROW_LABELS = frozenset({
+    "total",
+    "subtotal",
+    "sub-total",
+    "sub total",
+    "grand total",
+    "summary",
+    "portfolio total",
+    "account total",
+    "合计",
+    "总计",
+    "小计",
+    "汇总",
+    "持仓合计",
+    "合计金额",
+})
+
 _FIELD_CANDIDATES: Dict[str, List[str]] = {
     "symbol": [
         "symbol",
@@ -69,6 +98,7 @@ _FIELD_CANDIDATES: Dict[str, List[str]] = {
         "cost price",
         "成本价",
         "持仓成本价",
+        "平均成本",
     ],
     "current_price": [
         "markprice",
@@ -86,6 +116,7 @@ _FIELD_CANDIDATES: Dict[str, List[str]] = {
         "market value",
         "value",
         "市值",
+        "持仓市值",
     ],
     "unrealized_pnl": [
         "fifopnlunrealized",
@@ -123,7 +154,16 @@ def _clean_header(name: str) -> str:
 def _parse_float(raw: Optional[str], default: float = 0.0) -> float:
     if raw is None:
         return default
-    cleaned = raw.strip().replace(",", "").replace("$", "").replace("HK$", "").replace("%", "")
+    cleaned = (
+        raw.strip()
+        .replace(",", "")
+        .replace("HK$", "")
+        .replace("US$", "")
+        .replace("$", "")
+        .replace("¥", "")
+        .replace("￥", "")
+        .replace("%", "")
+    )
     if cleaned in ("", "-", "--", "N/A", "null"):
         return default
     try:
@@ -132,25 +172,70 @@ def _parse_float(raw: Optional[str], default: float = 0.0) -> float:
         return default
 
 
+def _normalize_currency(raw: Optional[str]) -> str:
+    if not raw:
+        return ""
+    stripped = raw.strip()
+    if stripped in _CURRENCY_ALIASES:
+        return _CURRENCY_ALIASES[stripped]
+    return stripped.upper()
+
+
+def _is_summary_row_symbol(raw_symbol: str) -> bool:
+    """Return True if a broker CSV symbol cell represents a footer/summary total row."""
+    cleaned = re.sub(r"[\(（\[【][^\)）\]】]*[\)）\]】]", "", raw_symbol).strip()
+    cleaned = cleaned.rstrip(":：").strip().lower()
+    if not cleaned:
+        return True
+    if cleaned in _SUMMARY_ROW_LABELS:
+        return True
+    if re.match(r"^(?:grand\s+|sub[\s-]?)?total\s+[a-z0-9\u4e00-\u9fff]+$", cleaned):
+        return True
+    if re.match(r"^(?:合计|总计|小计|汇总)\s*[a-z0-9\u4e00-\u9fff]*$", cleaned):
+        return True
+    return False
+
+
 def normalize_symbol(symbol: str, exchange: str = "", currency: str = "") -> str:
     """Normalize US and HK equity tickers into canonical format.
 
     Examples:
       - '9988', exchange='SEHK' -> '9988.HK'
       - 'SEHK:700' -> '0700.HK'
+      - 'HK.00700' -> '0700.HK'
       - '09988.HK' -> '9988.HK'
       - '00700.HK' -> '0700.HK'
       - 'NASDAQ:MU' -> 'MU'
+      - 'MU.US' -> 'MU'
+      - 'US.MU' -> 'MU'
+      - 'US.BRK.B' / 'BRK.B.US' -> 'BRK.B'
     """
     raw = symbol.strip().upper()
     exch = exchange.strip().upper()
-    curr = currency.strip().upper()
+    curr = _normalize_currency(currency)
 
     if ":" in raw:
         prefix, code = raw.split(":", 1)
-        if prefix in ("SEHK", "HKEX", "HK", "HKG"):
+        if prefix in _HK_EXCHANGE_PREFIXES:
             exch = "SEHK"
+        elif prefix in _US_EXCHANGE_PREFIXES:
+            exch = "US"
         raw = code.strip()
+
+    if raw.endswith(".US") and len(raw) > 3:
+        raw = raw[:-3]
+        if not exch:
+            exch = "US"
+
+    if "." in raw:
+        prefix, rest = raw.split(".", 1)
+        if rest:
+            if prefix in _HK_EXCHANGE_PREFIXES:
+                exch = "SEHK"
+                raw = rest.strip()
+            elif prefix in _US_EXCHANGE_PREFIXES:
+                exch = "US"
+                raw = rest.strip()
 
     if raw.endswith(".HK"):
         code_part = raw[:-3]
@@ -159,7 +244,7 @@ def normalize_symbol(symbol: str, exchange: str = "", currency: str = "") -> str
             return f"{trimmed.zfill(4)}.HK"
         return raw
 
-    if raw.isdigit() and (exch in ("SEHK", "HKEX", "HK", "HKG") or curr == "HKD"):
+    if raw.isdigit() and (exch in _HK_EXCHANGE_PREFIXES or curr == "HKD"):
         trimmed = str(int(raw))
         return f"{trimmed.zfill(4)}.HK"
 
@@ -187,7 +272,7 @@ def _extract_row_dict(headers: List[str], row: List[str]) -> Dict[str, str]:
 
 def _row_to_position(fields: Dict[str, str], broker_source: str) -> Optional[PositionRecord]:
     raw_symbol = fields.get("symbol", "").strip()
-    if not raw_symbol:
+    if not raw_symbol or _is_summary_row_symbol(raw_symbol):
         return None
 
     asset_class = fields.get("asset_class", "").upper()
@@ -198,10 +283,11 @@ def _row_to_position(fields: Dict[str, str], broker_source: str) -> Optional[Pos
     if qty == 0.0:
         return None
 
-    currency = (fields.get("currency") or "USD").upper()
+    explicit_currency = _normalize_currency(fields.get("currency"))
+    currency = explicit_currency or "USD"
     exchange = fields.get("exchange", "")
     symbol = normalize_symbol(raw_symbol, exchange=exchange, currency=currency)
-    if symbol.endswith(".HK") and not fields.get("currency"):
+    if symbol.endswith(".HK") and not explicit_currency:
         currency = "HKD"
 
     avg_cost = _parse_float(fields.get("avg_cost"))

@@ -231,4 +231,4 @@ def format_json_report(reports: List[PositionAuditReport]) -> str:
         },
         "positions": [r.to_dict() for r in reports],
     }
-    return json.dumps(payload, indent=2, ensure_ascii=False)
+    return json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False)

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import unittest
+import json
+import tempfile
+from copy import deepcopy
 from pathlib import Path
 
 from thesis_breaker.engine.auditor import audit_portfolio, audit_position
 from thesis_breaker.engine.thesis_lock import compute_thesis_lock_hash, verify_thesis_lock
-from thesis_breaker.formatters.caveman import format_markdown_report
+from thesis_breaker.formatters.caveman import format_json_report, format_markdown_report
 from thesis_breaker.models import (
     ExposurePosture,
     KillSwitch,
@@ -16,7 +19,7 @@ from thesis_breaker.models import (
     select_worst_breach,
 )
 from thesis_breaker.parsers.broker_csv import parse_broker_csv
-from thesis_breaker.parsers.obsidian_thesis import load_thesis_cards
+from thesis_breaker.parsers.obsidian_thesis import load_thesis_cards, parse_thesis_card
 
 
 class TestAuditorAndDrift(unittest.TestCase):
@@ -27,6 +30,57 @@ class TestAuditorAndDrift(unittest.TestCase):
         self.reports = {
             r.position.symbol: r for r in audit_portfolio(self.positions, self.cards)
         }
+
+    def test_valuation_errors_do_not_downgrade_confirmed_breaches(self) -> None:
+        position = next(p for p in self.positions if p.symbol == "0700.HK")
+        for metrics, expected in (
+            ({"game_rev_yoy_pct": 2, "gross_margin_pct": 40}, ExposurePosture.KILL_SWITCH_TRIGGERED),
+            ({"game_rev_yoy_pct": 2}, ExposurePosture.TRIM_EXPOSURE),
+        ):
+            with self.subTest(metrics=metrics):
+                report = audit_position(position, self.cards[position.symbol], {**metrics, "cost_of_equity_pct": 2})
+                self.assertEqual(report.posture, expected)
+                self.assertTrue(any("Invalid FCFE" in warning for warning in report.warnings))
+                self.assertNotIn("48小时", report.recommended_action)
+                self.assertIsNone(report.valuation_result)
+
+        card = deepcopy(self.cards[position.symbol])
+        card.kill_switches[0].critical = True
+        report = audit_position(position, card, {"game_rev_yoy_pct": 2, "cost_of_equity_pct": 2})
+        self.assertEqual(report.posture, ExposurePosture.KILL_SWITCH_TRIGGERED)
+
+    def test_under_three_switches_remains_untracked_even_when_breached(self) -> None:
+        card = deepcopy(self.cards["MU"])
+        card.kill_switches = card.kill_switches[:2]
+        position = next(p for p in self.positions if p.symbol == "MU")
+        self.assertEqual(audit_position(position, card).posture, ExposurePosture.UNTRACKED_NAKED_POSITION)
+
+    def test_nonfinite_note_actuals_are_rejected_and_json_remains_standard(self) -> None:
+        position = next(p for p in self.positions if p.symbol == "0700.HK")
+        source = Path(self.cards[position.symbol].source_path).read_text(encoding="utf-8")
+        for invalid in ("inf", "-inf", "nan"):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "0700.HK.md"
+                path.write_text(source.replace("  base_fcfe_per_share: 24.2", f'  base_fcfe_per_share: "{invalid}"'), encoding="utf-8")
+                report = audit_position(position, parse_thesis_card(path))
+                self.assertNotEqual(report.posture, ExposurePosture.HOLD_CONVICTION)
+                self.assertIsNone(report.valuation_result)
+                self.assertTrue(any("must be finite" in warning for warning in report.warnings))
+                self.assertNotIn("安全边际充足", report.caveman_lines[0])
+                def reject_constant(value):
+                    self.fail(f"Non-standard JSON number: {value}")
+                payload = json.loads(format_json_report([report]), parse_constant=reject_constant)
+                self.assertIsNone(payload["positions"][0]["thesis_card"]["latest_actuals"]["base_fcfe_per_share"])
+
+    def test_nan_mos_floor_cannot_confirm_hold(self) -> None:
+        position = next(p for p in self.positions if p.symbol == "0700.HK")
+        card = deepcopy(self.cards[position.symbol])
+        card.thesis_lock_sha256 = None
+        card.valuation.required_mos_pct = float("nan")
+        position.current_price = 1000
+        report = audit_position(position, card)
+        self.assertNotEqual(report.posture, ExposurePosture.HOLD_CONVICTION)
+        self.assertTrue(any("required_mos_pct" in warning for warning in report.warnings))
 
     def test_micron_catches_breach_and_style_drift(self) -> None:
         mu = self.reports["MU"]

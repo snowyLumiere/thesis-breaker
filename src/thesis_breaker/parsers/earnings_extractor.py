@@ -7,6 +7,7 @@ key-value flash notes and maps them directly to ThesisCard kill-switch metrics.
 from __future__ import annotations
 
 import csv
+import math
 import re
 import shutil
 import subprocess
@@ -23,15 +24,13 @@ _CURRENCY_PREFIX_RE = re.compile(
 )
 
 _NUMBER_RE = re.compile(
-    r"(?<![a-zA-Z])([+-]?\d+(?:,\d{3})*(?:\.\d+)?)"
-    r"(?:\s*(万亿|百万|[亿万千]|%|bps|trillion|billion|million|thousand|tn|bn|mm|mn|[tbmkx]))?"
-    r"(?=$|[^a-zA-Z\u4e00-\u9fff])",
-    re.IGNORECASE,
+    r"(?<![a-zA-Z0-9_.,+-])([+-]?(?:\d+(?:,\d{3})*(?:\.\d+)?|\.\d+))"
+    r"(?![\d.,])"
 )
 
 _UNIT_TOKEN_RE = re.compile(
-    r"(万亿|百万|[亿万千]|%|bps|trillion|billion|million|thousand|tn|bn|mm|mn|[tbmkx])"
-    r"(?=$|[^a-zA-Z\u4e00-\u9fff元])",
+    r"(?<![a-zA-Z])(万亿|百万|[亿万千]|%|bps|trillion|billion|million|thousand|tn|bn|mm|mn|[tbmkx])"
+    r"(?![a-zA-Z0-9])",
     re.IGNORECASE,
 )
 
@@ -92,7 +91,17 @@ def parse_metric_number(raw_value: str, expected_unit: str = "") -> Optional[flo
     if not match:
         return None
     num = float(match.group(1).replace(",", ""))
-    suffix = (match.group(2) or "").lower()
+    if not math.isfinite(num):
+        return None
+    remainder = text[match.end():].lstrip()
+    unit_match = _UNIT_TOKEN_RE.match(remainder)
+    if unit_match:
+        suffix = unit_match.group(1).lower()
+    else:
+        # Reject unsupported units rather than backtracking to a numeric prefix.
+        if re.match(r"[a-zA-Z0-9_.,+\-\u4e00-\u9fff]", remainder):
+            return None
+        suffix = ""
     exp = _normalize_expected_unit(expected_unit)
 
     if not exp:
@@ -117,7 +126,7 @@ def parse_metric_number(raw_value: str, expected_unit: str = "") -> Optional[flo
             return num
         if suffix in _MAGNITUDE_SCALES:
             scaled = num * (_MAGNITUDE_SCALES[suffix] / _MAGNITUDE_SCALES[exp])
-            return round(scaled, 10)
+            return round(scaled, 10) if math.isfinite(scaled) else None
         return None
 
     if exp == "x":
@@ -155,7 +164,16 @@ def _extract_section_blocks(text: str) -> Dict[str, str]:
         heading_match = re.match(r"^#{1,3}\s+(.+?)\s*$", line)
         if heading_match:
             heading_text = heading_match.group(1).strip()
-            ticker_match = re.search(r"\b(\d{4,5}\.HK|[A-Z]{1,6})\b", heading_text.upper())
+            ticker_match = re.search(
+                r"\b("
+                r"(?:HK|SEHK|HKEX|HKG)[.:]\d{1,5}"
+                r"|\d{1,5}\.HK"
+                r"|(?:US|USA|NASDAQ|NYSE|AMEX|ARCA)[.:][A-Z]{1,6}(?:\.[A-Z])?"
+                r"|[A-Z]{1,6}(?:\.[A-Z])?\.US"
+                r"|[A-Z]{1,6}(?:\.[A-Z])?"
+                r")\b",
+                heading_text.upper(),
+            )
             if ticker_match:
                 current_key = normalize_symbol(ticker_match.group(1))
             else:

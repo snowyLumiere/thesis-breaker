@@ -46,4 +46,16 @@ If `No module named thesis_breaker` occurs, install it from the `thesis-breaker`
 
 1. Run `python3 -m thesis_breaker audit --ibkr <csv> --notes <obsidian_dir> [--earnings <flash_md>] --format json`
 2. If any position's `latest_actuals` is stale (<15 min/week maintenance target), run `python3 -m thesis_breaker extract --earnings <flash_md> --notes <obsidian_dir> --write` first.
-3. Render the deterministic 3-line Caveman verdict directly from the engine output (`--format caveman`).
+3. Render the 3-line Caveman verdict from the deterministic engine output (`--format caveman`), applying the strict Engine vs. Agent division of labor below.
+
+## Engine vs. Agent Division of Labor
+
+- **100% Locked to Python Engine (NEVER alter or recalculate in prose)**:
+  - Kill-switch pass/breach/missing status, actual values, locked thresholds, and `%` deviations.
+  - SOTP / FCFE initial & repriced intrinsic values, Margin of Safety (`current_mos_pct`), and haircuts.
+  - SHA-256 thesis lock validity (`lock_tampered`), Tolerance Creep detection, and `ExposurePosture` (Lines 1 and 3 must match the Python engine verbatim).
+- **Agent Semantic Supplement (Line 2 ONLY when fixed keywords miss)**:
+  - The Python engine detects explicit rationalization phrases deterministically via `_RATIONALIZATION_PATTERNS`.
+  - When `--format json` shows a breached kill-switch, tolerance creep, lock tampering, or `unrealized_pnl_pct <= -10%` **AND** `drift_result.rationalization_phrases` is empty, read `thesis_card.latest_review_notes` semantically.
+  - If the investor wrote an implicit rationalization / moving-the-goalposts excuse (e.g., blaming macro noise, silently extending holding horizon, cherry-picking an unrelated vanity metric, or calling a thesis break "already priced in"), quote the **exact verbatim phrase** from `latest_review_notes` as `{excuse_b}` in Line 2 and tag it `语义合理化补抓`.
+  - Never invent excuses not present in local notes, never exceed the 3-line-per-position budget, and never downgrade or alter `ExposurePosture`.

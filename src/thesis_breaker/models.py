@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from enum import Enum
+import math
 from typing import Any, Dict, List, Optional
 
 
@@ -163,7 +164,18 @@ class PositionAuditReport:
         """Convert audit report into a JSON-serializable dictionary."""
         data = asdict(self)
         data["posture"] = self.posture.value
-        return data
+        return _json_safe_numbers(data)
+
+
+def _json_safe_numbers(value: Any) -> Any:
+    """Represent invalid raw inputs as null so diagnostic reports remain valid JSON."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _json_safe_numbers(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe_numbers(item) for item in value]
+    return value
 
 
 def select_worst_breach(breached: List[KillSwitchResult]) -> KillSwitchResult:

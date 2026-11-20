@@ -5,6 +5,31 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Tuple
 
 from thesis_breaker.models import KillSwitchResult, ValuationConfig, ValuationResult
+from thesis_breaker.numeric import finite_float
+
+
+def _validate_inputs(
+    config: ValuationConfig, actuals: Dict[str, float], entry_price: float, current_price: float
+) -> None:
+    for field in (
+        "diluted_shares", "net_cash", "required_mos_pct", "base_fcfe_per_share",
+        "growth_rate_pct", "terminal_growth_pct", "cost_of_equity_pct", "projection_years",
+    ):
+        finite_float(getattr(config, field), f"valuation.{field}")
+    for index, segment in enumerate(config.segments):
+        for field in ("metric_value", "multiple", "ownership_pct"):
+            finite_float(getattr(segment, field), f"valuation.segments[{index}].{field}")
+    for key, value in actuals.items():
+        finite_float(value, f"actuals.{key}")
+    finite_float(entry_price, "entry_price")
+    finite_float(current_price, "current_price")
+
+
+def _checked_result(result: ValuationResult) -> ValuationResult:
+    for field, value in vars(result).items():
+        if isinstance(value, (int, float)):
+            finite_float(value, f"valuation_result.{field}")
+    return result
 
 
 def _safe_mos(intrinsic_value: float, price: float) -> float:
@@ -42,7 +67,7 @@ def _finalize_mos(
 def _sum_breached_haircuts(kill_switch_results: List[KillSwitchResult]) -> float:
     """Aggregate valuation haircut percentage across breached kill-switches (capped at 90%)."""
     total = sum(
-        max(0.0, ksr.kill_switch.haircut_pct)
+        max(0.0, finite_float(ksr.kill_switch.haircut_pct, "haircut_pct"))
         for ksr in kill_switch_results
         if ksr.breached
     )
@@ -57,6 +82,7 @@ def compute_sotp(
     current_price: float,
 ) -> ValuationResult:
     """Compute initial and repriced Sum-Of-The-Parts (SOTP) intrinsic value per share."""
+    _validate_inputs(config, actuals, entry_price, current_price)
     shares = config.diluted_shares if config.diluted_shares > 0 else 1.0
     notes: List[str] = []
 
@@ -104,7 +130,7 @@ def compute_sotp(
         notes=notes,
     )
 
-    return ValuationResult(
+    result = ValuationResult(
         model_type="SOTP",
         currency=config.currency,
         initial_intrinsic_value=round(initial_iv, 2),
@@ -118,6 +144,7 @@ def compute_sotp(
         total_haircut_applied_pct=round(total_haircut, 2),
         notes=notes,
     )
+    return _checked_result(result)
 
 
 def _fcfe_dcf_per_share(
@@ -156,7 +183,10 @@ def _fcfe_dcf_per_share(
 
     terminal_value = (projected_fcfe * (1.0 + gt)) / spread
     pv_terminal = terminal_value / ((1.0 + ke) ** projection_years)
-    return max(0.0, pv_explicit + pv_terminal + net_cash_per_share)
+    intrinsic_value = finite_float(
+        pv_explicit + pv_terminal + net_cash_per_share, "fcfe_intrinsic_value"
+    )
+    return max(0.0, intrinsic_value)
 
 
 def compute_fcfe(
@@ -167,6 +197,7 @@ def compute_fcfe(
     current_price: float,
 ) -> ValuationResult:
     """Compute initial and repriced FCFE intrinsic value per share."""
+    _validate_inputs(config, actuals, entry_price, current_price)
     shares = config.diluted_shares if config.diluted_shares > 0 else 1.0
     net_cash_per_share = config.net_cash / shares
     notes: List[str] = []
@@ -217,7 +248,7 @@ def compute_fcfe(
         notes=notes,
     )
 
-    return ValuationResult(
+    result = ValuationResult(
         model_type="FCFE",
         currency=config.currency,
         initial_intrinsic_value=round(initial_iv, 2),
@@ -231,6 +262,7 @@ def compute_fcfe(
         total_haircut_applied_pct=round(total_haircut, 2),
         notes=notes,
     )
+    return _checked_result(result)
 
 
 def reprice_valuation(

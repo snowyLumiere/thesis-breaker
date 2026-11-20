@@ -8,6 +8,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from thesis_breaker.engine.thesis_lock import is_threshold_relaxed, verify_thesis_lock
 from thesis_breaker.engine.valuation import reprice_valuation
+from thesis_breaker.numeric import finite_float
 from thesis_breaker.formatters.caveman import format_caveman_lines
 from thesis_breaker.models import (
     DriftAuditResult,
@@ -79,6 +80,10 @@ def evaluate_kill_switch(
     ks: KillSwitch, actuals: Dict[str, float]
 ) -> KillSwitchResult:
     """Evaluate a single falsifiable kill-switch against latest actual data."""
+    finite_float(ks.threshold, f"kill_switch.{ks.id}.threshold")
+    finite_float(ks.haircut_pct, f"kill_switch.{ks.id}.haircut_pct")
+    if ks.locked_threshold is not None:
+        finite_float(ks.locked_threshold, f"kill_switch.{ks.id}.locked_threshold")
     relaxed = is_threshold_relaxed(ks)
     # Audit against the stricter original locked_threshold if tolerance creep occurred!
     effective_threshold = (
@@ -98,7 +103,7 @@ def evaluate_kill_switch(
             missing_data=True,
         )
 
-    actual = float(actuals[ks.metric_key])
+    actual = finite_float(actuals[ks.metric_key], f"actuals.{ks.metric_key}")
     passed = _check_operator(actual, ks.operator, effective_threshold)
     breached = not passed
 
@@ -106,6 +111,7 @@ def evaluate_kill_switch(
         deviation_pct = ((actual - effective_threshold) / abs(effective_threshold)) * 100.0
     else:
         deviation_pct = actual - effective_threshold
+    finite_float(deviation_pct, f"kill_switch.{ks.id}.deviation_pct")
 
     return KillSwitchResult(
         kill_switch=ks,
@@ -233,11 +239,11 @@ def _determine_posture_and_action(
     drift: DriftAuditResult,
 ) -> Tuple[ExposurePosture, str]:
     """Map deterministic facts to an ExposurePosture for human review (never auto-orders)."""
-    if card is None or card.validation_errors:
+    if card is None or len(card.kill_switches) < 3:
         reason = (
             "缺少 Obsidian 买入逻辑存证卡（裸奔仓位）"
             if card is None
-            else f"逻辑卡校验未通过: {'; '.join(card.validation_errors)}"
+            else "逻辑卡不足 3 条可证伪死线"
         )
         return (
             ExposurePosture.UNTRACKED_NAKED_POSITION,
@@ -266,6 +272,14 @@ def _determine_posture_and_action(
         return (
             ExposurePosture.KILL_SWITCH_TRIGGERED,
             "无条件执行死线砍仓/清仓（至少立即削减 50%-100% 敞口），禁止摊平",
+        )
+
+    # An unavailable valuation cannot erase an independently established breach.
+    if card.validation_errors and not breached:
+        return (
+            ExposurePosture.UNTRACKED_NAKED_POSITION,
+            "48小时内补齐3条可证伪死线与估值底稿，否则清仓归零"
+            f"（逻辑卡校验未通过: {'; '.join(card.validation_errors)}）",
         )
 
     if (
@@ -332,13 +346,26 @@ def audit_position(
         preliminary.caveman_lines = format_caveman_lines(preliminary)
         return preliminary
 
-    actuals = _merge_actuals(card, external_actuals)
     runtime_errors: List[str] = []
+    actuals: Dict[str, float] = {}
+    for key, value in _merge_actuals(card, external_actuals).items():
+        try:
+            actuals[key] = finite_float(value, f"actuals.{key}")
+        except ValueError as exc:
+            runtime_errors.append(str(exc))
+    for field in (
+        "quantity", "avg_cost", "current_price", "market_value",
+        "unrealized_pnl", "unrealized_pnl_pct", "account_weight_pct",
+    ):
+        try:
+            finite_float(getattr(position, field), f"position.{field}")
+        except ValueError as exc:
+            runtime_errors.append(str(exc))
     ks_results: List[KillSwitchResult] = []
     for ks in card.kill_switches:
         try:
             ks_results.append(evaluate_kill_switch(ks, actuals))
-        except ValueError as exc:
+        except (ValueError, OverflowError) as exc:
             runtime_errors.append(str(exc))
 
     lock_valid, lock_reason = verify_thesis_lock(card)
@@ -352,7 +379,7 @@ def audit_position(
                 entry_price=card.entry_price,
                 current_price=position.current_price,
             )
-        except ValueError as exc:
+        except (ValueError, OverflowError) as exc:
             runtime_errors.append(str(exc))
 
     effective_card = (

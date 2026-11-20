@@ -380,14 +380,16 @@ def _parse_block_scalar(
         blank_widths: List[int] = []
         while scan < n:
             raw = raw_lines[scan]
-            if "\t" in raw[: len(raw) - len(raw.lstrip(" \t"))]:
-                raise ValueError(f"Tab indentation is not allowed in YAML: {raw!r}")
             if raw.strip() == "":
+                if "\t" in raw:
+                    raise ValueError("Tab-only blank line is invalid in block scalar indentation")
                 blank_widths.append(len(raw))
                 scan += 1
                 continue
-            leading = _leading_spaces(raw)
+            leading = len(raw) - len(raw.lstrip(" "))
             if leading <= parent_indent:
+                if raw[leading:].startswith("\t"):
+                    raise ValueError(f"Tab indentation is not allowed in YAML: {raw!r}")
                 # Empty block scalar followed immediately by sibling/parent/comment
                 break
             block_indent = leading
@@ -404,6 +406,11 @@ def _parse_block_scalar(
     collected: List[str] = []
     while idx < n:
         raw = raw_lines[idx]
+        # Only the required spaces are indentation. Tabs after them are content.
+        if raw.startswith(" " * block_indent):
+            collected.append(raw[block_indent:])
+            idx += 1
+            continue
         if raw.strip() == "":
             if "\t" in raw:
                 raise ValueError("Tab-only blank line is invalid in block scalar indentation")
@@ -865,7 +872,7 @@ def _format_scalar(value: Any) -> str:
 
 def _can_emit_block_scalar(value: str) -> bool:
     """Return True when a multiline string can roundtrip cleanly via '|' or '|-'."""
-    if "\n" not in value or "\r" in value:
+    if "\n" not in value or "\r" in value or "\t" in value:
         return False
     if value.endswith("\n\n") or value.strip("\n") == "":
         return False

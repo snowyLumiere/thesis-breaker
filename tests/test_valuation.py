@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from thesis_breaker.engine.auditor import audit_position
@@ -20,6 +21,26 @@ from thesis_breaker.parsers.obsidian_thesis import parse_thesis_card
 
 
 class TestValuationEngine(unittest.TestCase):
+    def test_nonfinite_inputs_and_overflowed_results_are_rejected(self) -> None:
+        cfg = ValuationConfig(
+            model_type="FCFE", currency="USD", diluted_shares=1,
+            base_fcfe_per_share=20, growth_rate_pct=10,
+        )
+        for invalid in (float("inf"), float("-inf"), float("nan")):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(ValueError, "finite"):
+                    compute_fcfe(cfg, [], {"base_fcfe_per_share": invalid}, 100, 100)
+                with self.assertRaisesRegex(ValueError, "finite"):
+                    compute_fcfe(replace(cfg, required_mos_pct=invalid), [], {}, 100, 100)
+        with self.assertRaisesRegex(ValueError, "finite"):
+            compute_fcfe(replace(cfg, base_fcfe_per_share=1e308), [], {}, 100, 100)
+        sotp = ValuationConfig(
+            model_type="SOTP", currency="USD", diluted_shares=1,
+            segments=[SOTPSegment(name="Core", metric_value=1e308, multiple=10)],
+        )
+        with self.assertRaisesRegex(ValueError, "finite"):
+            compute_sotp(sotp, [], {}, 100, 100)
+
     def test_sotp_repricing_with_segment_update_and_haircut(self) -> None:
         cfg = ValuationConfig(
             model_type="SOTP",

@@ -218,8 +218,8 @@ latest_actuals: {{}}
 
 
 def _cmd_init_note(args: argparse.Namespace) -> int:
-    currency = "HKD" if args.symbol.upper().endswith(".HK") else "USD"
-    sym = normalize_symbol(args.symbol, currency=currency)
+    sym = normalize_symbol(args.symbol)
+    currency = "HKD" if sym.endswith(".HK") else "USD"
     template = _build_note_template(
         symbol=sym,
         name=args.name or sym,

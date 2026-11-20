@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from thesis_breaker import cli
+from thesis_breaker.engine.auditor import evaluate_kill_switch
 from thesis_breaker.parsers.earnings_extractor import (
     extract_earnings_metrics,
     parse_metric_number,
@@ -17,6 +18,38 @@ from thesis_breaker.parsers.obsidian_thesis import load_thesis_cards, parse_thes
 
 
 class TestEarningsExtractor(unittest.TestCase):
+    def test_chinese_currency_units_and_invalid_numeric_suffixes(self) -> None:
+        for raw, unit, expected in (
+            ("5000万元", "B", 0.05),
+            ("5000万元", "亿元", 0.5),
+            ("5亿元", "B", 0.5),
+            ("1.2B元", "B", 1.2),
+            ("180bps同比", "%", 1.8),
+            ("500MB", "B", None),
+            ("62.5percent", "%", None),
+            ("1,23M", "B", None),
+            ("1 000M", "B", None),
+            ("1.2.3B", "B", None),
+        ):
+            with self.subTest(raw=raw, unit=unit):
+                self.assertEqual(parse_metric_number(raw, unit), expected)
+
+    def test_chinese_amount_does_not_hide_critical_breach(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        card = load_thesis_cards(root / "examples/obsidian_vault")["MU"]
+        switch = card.kill_switches[0]
+        switch.metric_key = "revenue_b"
+        switch.unit = "B"
+        switch.threshold = switch.locked_threshold = 1.0
+        with tempfile.TemporaryDirectory() as tmp:
+            flash = Path(tmp) / "flash.md"
+            flash.write_text("## MU\n- revenue_b: 5000万元\n", encoding="utf-8")
+            actuals = extract_earnings_metrics(flash, [card])["MU"]
+        self.assertEqual(actuals["revenue_b"], 0.05)
+        result = evaluate_kill_switch(switch, actuals)
+        self.assertTrue(result.breached)
+        self.assertTrue(result.kill_switch.critical)
+
     def test_parse_metric_number_units(self) -> None:
         self.assertEqual(parse_metric_number("62.0%"), 62.0)
         self.assertEqual(parse_metric_number("-4.5%"), -4.5)
@@ -178,6 +211,34 @@ latest_actuals: {}
             p.write_text(mixed_report, encoding="utf-8")
             extracted = extract_earnings_metrics(p, cards.values())
             self.assertEqual(extracted["MU"]["hbm_yield_pct"], 62.0)
+
+    def test_extract_handles_longbridge_and_futu_section_headings(self) -> None:
+        base = Path(__file__).resolve().parents[1] / "examples"
+        cards = load_thesis_cards(base / "obsidian_vault")
+        brk_card_text = (
+            (base / "obsidian_vault" / "MU_Micron_SOTP.md")
+            .read_text(encoding="utf-8")
+            .replace("symbol: MU", 'symbol: "BRK.B"')
+            .replace("hbm_yield_pct", "float_growth_pct")
+        )
+        report = (
+            "## MU.US Micron\n"
+            "- hbm_yield_pct: 61.5%\n\n"
+            "## HK.00700 Tencent\n"
+            "- game_rev_yoy_pct: 14.0%\n\n"
+            "## BRK.B Berkshire Hathaway\n"
+            "- float_growth_pct: 8.5%\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            brk_path = Path(tmp) / "BRK_B.md"
+            brk_path.write_text(brk_card_text, encoding="utf-8")
+            brk_card = parse_thesis_card(brk_path)
+            p = Path(tmp) / "broker_headings.md"
+            p.write_text(report, encoding="utf-8")
+            extracted = extract_earnings_metrics(p, [*cards.values(), brk_card])
+            self.assertEqual(extracted["MU"]["hbm_yield_pct"], 61.5)
+            self.assertEqual(extracted["0700.HK"]["game_rev_yoy_pct"], 14.0)
+            self.assertEqual(extracted["BRK.B"]["float_growth_pct"], 8.5)
 
 
 if __name__ == "__main__":

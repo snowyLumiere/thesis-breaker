@@ -198,7 +198,6 @@ class TestCliEndToEnd(unittest.TestCase):
                     "pip",
                     "wheel",
                     str(self.root),
-                    "--no-build-isolation",
                     "--no-deps",
                     "-w",
                     str(dist_dir),
@@ -224,6 +223,54 @@ class TestCliEndToEnd(unittest.TestCase):
             )
             self.assertIn("[持仓：MU", proc.stdout)
             self.assertIn("[HOLD_CONVICTION]", proc.stdout)
+
+    def test_init_note_normalizes_longbridge_and_futu_symbols(self) -> None:
+        hk_note = self._run_cli(["init-note", "--symbol", "HK.00700", "--name", "Tencent"])
+        self.assertIn("symbol: 0700.HK", hk_note)
+        self.assertIn("currency: HKD", hk_note)
+
+        us_note = self._run_cli(["init-note", "--symbol", "MU.US", "--name", "Micron"])
+        self.assertIn("symbol: MU", us_note)
+        self.assertIn("currency: USD", us_note)
+
+    def test_audit_survives_messy_obsidian_vault_and_longbridge_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            vault = tmp_path / "my_obsidian"
+            shutil.copytree(self.root / "examples" / "obsidian_vault", vault)
+            (vault / ".trash").mkdir()
+            (vault / ".trash" / "old_MU.md").write_text("---\nsymbol: MU\n\tbad: %\n---\n", encoding="utf-8")
+            (vault / "broken_daily.md").write_text("---\nrate: %\n---\nDaily note.\n", encoding="utf-8")
+
+            lb_csv = tmp_path / "longbridge.csv"
+            lb_csv.write_text(
+                "股票代码,股票名称,币种,持仓数量,成本价,现价\n"
+                "MU.US,Micron,USD,300,118.0,98.6\n"
+                "HK.00700,Tencent,港币,600,345.0,408.8\n"
+                "合计,,,900,,\n",
+                encoding="utf-8",
+            )
+
+            out_buf = io.StringIO()
+            err_buf = io.StringIO()
+            with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+                code = main(
+                    [
+                        "audit",
+                        "--ibkr",
+                        str(lb_csv),
+                        "--notes",
+                        str(vault),
+                        "--earnings",
+                        str(self.root / "examples" / "earnings_q4_flash.md"),
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            payload = json.loads(out_buf.getvalue())
+            self.assertEqual(payload["summary"]["total_positions"], 2)
+            self.assertIn("broken_daily.md", err_buf.getvalue())
 
 
 if __name__ == "__main__":

@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from thesis_breaker import cli
 from thesis_breaker.parsers.obsidian_thesis import (
     load_thesis_cards,
     parse_thesis_card,
+    split_frontmatter,
     update_thesis_card_frontmatter,
 )
 from thesis_breaker.parsers.simple_yaml import (
@@ -23,6 +26,49 @@ from thesis_breaker.parsers.simple_yaml import (
 
 
 class TestObsidianThesisParser(unittest.TestCase):
+    def test_multiline_markers_and_tabs_survive_cli_writes(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "examples/obsidian_vault/MU_Micron_SOTP.md").read_text(encoding="utf-8")
+        _, original_body = split_frontmatter(source)
+        for description in ("line1\n---\nline3\n", "line1\n\tline2\n"):
+            with self.subTest(description=description), tempfile.TemporaryDirectory() as tmp:
+                note_path = Path(tmp) / "MU.md"
+                fields = (
+                    f"custom_description: {json.dumps(description)}\n"
+                    "custom_property: preserve-me\n"
+                )
+                note_path.write_text(source.replace("kill_switches:\n", fields + "kill_switches:\n", 1), encoding="utf-8")
+                for args in (
+                    ["lock", "--notes", str(note_path), "--force"],
+                    ["extract", "--notes", str(note_path), "--earnings", str(root / "examples/earnings_q4_flash.md"), "--write"],
+                ):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.assertEqual(cli.main(args), 0)
+                    yaml_after, body_after = split_frontmatter(note_path.read_text(encoding="utf-8"))
+                    meta = parse_yaml(yaml_after)
+                    self.assertEqual(meta["custom_description"], description)
+                    self.assertEqual(meta["custom_property"], "preserve-me")
+                    self.assertEqual(len(meta["kill_switches"]), 3)
+                    self.assertIsNotNone(parse_thesis_card(note_path))
+                    self.assertEqual(body_after.lstrip("\r\n"), original_body.lstrip("\r\n"))
+
+    def test_builtin_block_scalar_tabs_are_content_after_indentation(self) -> None:
+        for value in ("line1\n\tline2\n", "\tline1\nline2\n"):
+            payload = {"description": value}
+            self.assertEqual(_parse_yaml_builtin(_dump_yaml_builtin(payload)), payload)
+        parsed = _parse_yaml_builtin("description: |\n  \tline1\n  line2\n")
+        self.assertEqual(parsed["description"], "\tline1\nline2\n")
+
+    def test_lossy_serialization_is_rejected_before_writing(self) -> None:
+        source = "---\nsymbol: MU\ncustom_property: preserve-me\n---\n\nKeep body.\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            note_path = Path(tmp) / "MU.md"
+            note_path.write_text(source, encoding="utf-8")
+            with patch("thesis_breaker.parsers.obsidian_thesis.dump_yaml", return_value="symbol: MU"):
+                with self.assertRaisesRegex(ValueError, "refusing to write"):
+                    update_thesis_card_frontmatter(note_path, lambda meta: meta)
+            self.assertEqual(note_path.read_text(encoding="utf-8"), source)
+
     def test_simple_yaml_roundtrip(self) -> None:
         sample = """
 symbol: "MU"
@@ -265,6 +311,116 @@ Blackwell thesis.
             self.assertEqual(yaml.safe_load(dumped), payload)
         except ImportError:
             pass
+
+    def test_real_vault_skips_hidden_dirs_and_invalid_notes_with_warnings(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        mu_source = (root / "examples/obsidian_vault/MU_Micron_SOTP.md").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            # Put the vault itself under a dot-prefixed parent to verify only relative hidden paths are skipped.
+            vault = Path(tmp) / ".hidden_parent" / "vault"
+            vault.mkdir(parents=True)
+            (vault / "MU.md").write_text(mu_source, encoding="utf-8")
+
+            # Stale trashed copy with altered entry_price must NOT override the active card.
+            trash_dir = vault / ".trash"
+            trash_dir.mkdir()
+            (trash_dir / "z_MU_deleted.md").write_text(
+                mu_source.replace("entry_price: 118.0", "entry_price: 999.0"),
+                encoding="utf-8",
+            )
+
+            # .obsidian config markdown and hidden dotfile must be ignored without warnings.
+            obsidian_dir = vault / ".obsidian"
+            obsidian_dir.mkdir()
+            (obsidian_dir / "broken_plugin_doc.md").write_text(
+                "---\nbad_tab:\n\tvalue: %\n---\n", encoding="utf-8"
+            )
+            (vault / ".secret_draft.md").write_text(
+                "---\nbad_tab:\n\tvalue: %\n---\n", encoding="utf-8"
+            )
+
+            # Regular non-thesis daily note should be silently ignored.
+            (vault / "2026-11-20_daily.md").write_text(
+                "---\ntags: [daily, journal]\n---\n\nMarket felt noisy today.\n",
+                encoding="utf-8",
+            )
+
+            # Broken non-thesis template (e.g. Obsidian Templater / unquoted %) warns and is skipped.
+            broken_template = vault / "Templates_bad.md"
+            broken_template.write_text(
+                "---\ntitle: {{date}}\nrate: %\n---\n\nTemplate body.\n",
+                encoding="utf-8",
+            )
+
+            # Non-UTF-8 file warns and is skipped rather than crashing the scan.
+            (vault / "binary_clip.md").write_bytes(b"\xff\xfe---\nsymbol: BAD\n---\n")
+
+            err_buf = io.StringIO()
+            with contextlib.redirect_stderr(err_buf):
+                cards = load_thesis_cards(vault)
+
+            self.assertEqual(set(cards.keys()), {"MU"})
+            self.assertEqual(cards["MU"].entry_price, 118.0)
+            warnings = err_buf.getvalue()
+            self.assertIn("Templates_bad.md", warnings)
+            self.assertIn("binary_clip.md", warnings)
+            self.assertNotIn("broken_plugin_doc.md", warnings)
+            self.assertNotIn(".secret_draft.md", warnings)
+
+            # Explicit single-file load must remain fail-closed.
+            with self.assertRaises(ValueError):
+                load_thesis_cards(broken_template)
+
+    def test_duplicate_symbol_emits_warning_and_null_optional_numbers_parse(self) -> None:
+        note_template = """---
+symbol: NVDA
+name: NVIDIA
+entry_price: null
+initial_strategy_type: cyclical_swing
+kill_switches:
+  - id: KS-1
+    name: "DC YoY"
+    metric_key: dc_yoy
+    operator: ">="
+    threshold: 30.0
+    locked_threshold: null
+    haircut_pct: null
+  - id: KS-2
+    name: "GM"
+    metric_key: gm
+    operator: ">="
+    threshold: 70.0
+  - id: KS-3
+    name: "Capex"
+    metric_key: capex
+    operator: "<="
+    threshold: 5.0
+valuation:
+  model_type: SOTP
+  currency: USD
+  diluted_shares: 24.5
+  net_cash: null
+  segments:
+    - name: DC
+      metric_value: 100.0
+      multiple: 25.0
+      ownership_pct: null
+---
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            (vault / "a_NVDA.md").write_text(note_template, encoding="utf-8")
+            (vault / "b_NVDA_copy.md").write_text(note_template, encoding="utf-8")
+
+            err_buf = io.StringIO()
+            with contextlib.redirect_stderr(err_buf):
+                cards = load_thesis_cards(vault)
+
+            self.assertIn("NVDA", cards)
+            self.assertEqual(cards["NVDA"].entry_price, 0.0)
+            self.assertEqual(cards["NVDA"].valuation.net_cash, 0.0)
+            self.assertEqual(cards["NVDA"].valuation.segments[0].ownership_pct, 100.0)
+            self.assertIn("duplicate ThesisCard for NVDA", err_buf.getvalue())
 
 
 if __name__ == "__main__":

@@ -15,10 +15,42 @@ from thesis_breaker.parsers.obsidian_thesis import load_thesis_cards
 class TestBrokerCsvParser(unittest.TestCase):
     def test_normalize_symbol_us_and_hk(self) -> None:
         self.assertEqual(normalize_symbol("NASDAQ:MU"), "MU")
+        self.assertEqual(normalize_symbol("US:NVDA"), "NVDA")
+        self.assertEqual(normalize_symbol("MU.US"), "MU")
+        self.assertEqual(normalize_symbol("US.MU"), "MU")
+        self.assertEqual(normalize_symbol("BRK.B.US"), "BRK.B")
+        self.assertEqual(normalize_symbol("US.BRK.B"), "BRK.B")
+        self.assertEqual(normalize_symbol("BRK.B"), "BRK.B")
+        self.assertEqual(normalize_symbol("USA.US"), "USA")
+        self.assertEqual(normalize_symbol("US.USA.US"), "USA")
         self.assertEqual(normalize_symbol("9988", exchange="SEHK", currency="HKD"), "9988.HK")
         self.assertEqual(normalize_symbol("700", exchange="SEHK", currency="HKD"), "0700.HK")
         self.assertEqual(normalize_symbol("00700.HK"), "0700.HK")
+        self.assertEqual(normalize_symbol("HK.00700"), "0700.HK")
+        self.assertEqual(normalize_symbol("HK.700"), "0700.HK")
+        self.assertEqual(normalize_symbol("HK.09988"), "9988.HK")
         self.assertEqual(normalize_symbol("SEHK:9988"), "9988.HK")
+        self.assertEqual(normalize_symbol("SEHK.700"), "0700.HK")
+
+    def test_longbridge_futu_tickers_and_summary_rows_filtered(self) -> None:
+        mixed_csv = (
+            "股票代码,股票名称,币种,持仓数量,平均成本,最新价,持仓市值\n"
+            "MU.US,美光科技,美元,100,118.0,98.6,9860.0\n"
+            "US.BRK.B,伯克希尔B,USD,10,400.0,450.0,4500.0\n"
+            "HK.00700,腾讯控股,港币,200,345.0,408.8,81760.0\n"
+            "合计,全部持仓,,310,,,100000.0\n"
+            "Total (USD),Summary,USD,310,,,100000.0\n"
+            "SubTotal,,HKD,200,,,81760.0\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "longbridge_futu.csv"
+            p.write_text(mixed_csv, encoding="utf-8")
+            positions = parse_broker_csv(p)
+            by_sym = {pos.symbol: pos for pos in positions}
+            self.assertEqual(set(by_sym.keys()), {"MU", "BRK.B", "0700.HK"})
+            self.assertEqual(by_sym["MU"].currency, "USD")
+            self.assertEqual(by_sym["0700.HK"].currency, "HKD")
+            self.assertAlmostEqual(sum(pos.account_weight_pct for pos in positions), 100.0, places=1)
 
     def test_parse_ibkr_flex_example(self) -> None:
         csv_path = (
